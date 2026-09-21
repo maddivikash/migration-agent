@@ -29,12 +29,12 @@ from __future__ import annotations
 import hashlib, time
 from dataclasses import dataclass, field, asdict
 from typing import Callable
-from .schema import Schema
-from .ingest import read_source, SourceTable
-from .mapping import propose_mapping, ColumnMapping
-from . import cleaning as C
-from .llm import LLM
-from .memory import Memory
+from app.agent.schema import Schema
+from app.agent.ingest import read_source, SourceTable
+from app.agent.mapping import propose_mapping, ColumnMapping
+from app.agent import cleaning as C
+from app.agent.llm import LLM
+from app.agent.memory import Memory
 
 CRITICAL_FIELDS = {"employee_id", "email", "hire_date", "date_of_birth"}
 LLM_TRUST = 0.85   # LLM suggestion must be at least this confident to act on alone

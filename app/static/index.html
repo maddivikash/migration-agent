@@ -4,11 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Migration Agent</title>
+<meta name="description" content="A supervised AI agent that migrates messy client HR exports into a target schema, escalating only what it is genuinely unsure about.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2'%3E%3Cpath d='M4 7h16M4 12h10M4 17h16'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <div class="brand"><span class="dot" id="statusDot"></span> Migration Agent <span class="sub">employees → new HR platform</span></div>
+  <div class="brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#e4e4e7" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h16"/></svg></span>Migration Agent <span class="sub">employees → new HR platform</span> <span class="dot" id="statusDot" title="agent status"></span></div>
   <div class="stats" id="stats"></div>
   <div class="actions">
     <button id="btnRun" class="primary">▶ Run agent</button>
@@ -23,12 +27,26 @@
   <button data-tab="mappings">Mappings</button>
   <button data-tab="records">Records</button>
   <button data-tab="audit">Audit trail</button>
+  <span class="spacer"></span>
+  <div class="links">
+    <a href="#" id="linkDemo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Watch demo</a>
+    <a href="https://github.com/maddivikash/migration-agent" target="_blank" rel="noopener" id="linkRepo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>GitHub</a>
+    <a href="https://github.com/maddivikash/migration-agent/blob/main/docs/WRITEUP.md" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>Write-up</a>
+  </div>
 </nav>
 
 <main>
   <section id="tab-live" class="tab active">
     <div class="split">
-      <div class="feed" id="feed"><div class="empty">No run yet. Click <b>Run agent</b> to start on the sample files.</div></div>
+      <div>
+        <div id="banner" class="banner hidden"></div>
+        <div class="feed" id="feed"><div class="hero">
+          <h1>Migrate messy HR exports, supervised.</h1>
+          <p>The agent reads the client's source files, maps them onto the target schema, cleans what it safely can, and stops only for what it is genuinely unsure about. You review a short queue, not every field.</p>
+          <button class="primary" onclick="document.getElementById('btnRun').click()">▶ Run agent on the sample exports</button>
+          <div class="chips"><span class="chip">3 source files</span><span class="chip">CSV + Excel</span><span class="chip">115 rows</span><span class="chip">planted duplicates, bad dates, unknown codes</span></div>
+        </div></div>
+      </div>
       <aside class="side">
         <h3>What the agent decides alone</h3>
         <ul class="policy">
@@ -82,6 +100,10 @@
 </main>
 
 <div id="drawer" class="drawer hidden"><div class="drawer-inner"><button class="close" onclick="closeDrawer()">✕</button><div id="drawerBody"></div></div></div>
+<div id="demoModal" class="modal hidden"><div class="modal-inner"><button class="close" onclick="closeDemo()">✕</button>
+  <video id="demoVideo" src="/static/demo.webm" controls preload="metadata"></video>
+  <div class="cap"><span>1 min 40 s · agent run → 7 escalations resolved in the UI → push, retry, rollback → audit trail</span><a class="button small" href="/static/demo.webm" download>⤓ Download</a></div>
+</div></div>
 <div id="toast" class="toast hidden"></div>
 <script src="/static/app.js"></script>
 </body>

@@ -1,6 +1,6 @@
 """Record the demo video with Playwright: run -> resolve escalations in the UI -> push -> retry -> rollback -> audit.
 Usage: .venv/bin/python scripts/record_demo.py   (server must be running on :8000; .state is cleared first)
-Output: docs/demo.webm (plays in any browser / VLC)
+Output: app/static/demo.webm (plays in any browser / VLC)
 """
 import glob, os, shutil, subprocess, time
 from pathlib import Path
@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = os.getenv("DEMO_URL", "http://localhost:8000")
-OUT = ROOT / "docs"
+OUT = ROOT / "app" / "static"
 httpx.delete(f"{BASE}/api/memory", timeout=5)   # start with an empty mapping memory
 shutil.rmtree(ROOT / "docs" / "_video", ignore_errors=True)
 

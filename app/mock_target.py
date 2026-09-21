@@ -22,6 +22,34 @@ def _chaos(emp_id: str) -> bool:
     return int(hashlib.sha1(emp_id.encode()).hexdigest(), 16) % 9 == 0
 
 
+# --- the behaviour, as plain functions returning (status_code, body) --------------------------
+def upsert_record(employee_id: str, body: dict) -> tuple[int, dict]:
+    ATTEMPTS[employee_id] = ATTEMPTS.get(employee_id, 0) + 1
+    if _chaos(employee_id) and ATTEMPTS[employee_id] == 1:
+        return 503, {"detail": "rate limited - retry after 1s"}
+    if body.get("manager_email") and not any(e.get("email") == body["manager_email"] for e in STORE.values()):
+        return 422, {"detail": f"manager_email {body['manager_email']} does not exist in the target system"}
+    if body.get("salary") is not None and float(body["salary"]) > SALARY_LIMIT:
+        return 422, {"detail": f"salary exceeds the plan limit of {SALARY_LIMIT:,}"}
+    created = employee_id not in STORE
+    STORE[employee_id] = {**body, "employee_id": employee_id, "_updated_at": time.time()}
+    return 200, {"status": "created" if created else "updated", "employee_id": employee_id}
+
+
+def delete_record(employee_id: str) -> tuple[int, dict]:
+    if employee_id not in STORE:
+        return 404, {"detail": "not found"}
+    del STORE[employee_id]
+    return 200, {"status": "deleted", "employee_id": employee_id}
+
+
+# --- the HTTP surface -----------------------------------------------------------------------
+def _respond(code: int, body: dict):
+    if code >= 400:
+        raise HTTPException(code, body.get("detail"))
+    return body
+
+
 @router.get("/employees")
 def list_employees():
     return {"count": len(STORE), "employees": list(STORE.values())}
@@ -29,25 +57,12 @@ def list_employees():
 
 @router.put("/employees/{employee_id}")
 async def upsert(employee_id: str, req: Request):
-    body = await req.json()
-    ATTEMPTS[employee_id] = ATTEMPTS.get(employee_id, 0) + 1
-    if _chaos(employee_id) and ATTEMPTS[employee_id] == 1:
-        raise HTTPException(503, "rate limited - retry after 1s")
-    if body.get("manager_email") and not any(e.get("email") == body["manager_email"] for e in STORE.values()):
-        raise HTTPException(422, f"manager_email {body['manager_email']} does not exist in the target system")
-    if body.get("salary") is not None and float(body["salary"]) > SALARY_LIMIT:
-        raise HTTPException(422, f"salary exceeds the plan limit of {SALARY_LIMIT:,}")
-    created = employee_id not in STORE
-    STORE[employee_id] = {**body, "employee_id": employee_id, "_updated_at": time.time()}
-    return {"status": "created" if created else "updated", "employee_id": employee_id}
+    return _respond(*upsert_record(employee_id, await req.json()))
 
 
 @router.delete("/employees/{employee_id}")
 def delete(employee_id: str):
-    if employee_id not in STORE:
-        raise HTTPException(404, "not found")
-    del STORE[employee_id]
-    return {"status": "deleted", "employee_id": employee_id}
+    return _respond(*delete_record(employee_id))
 
 
 @router.post("/reset")

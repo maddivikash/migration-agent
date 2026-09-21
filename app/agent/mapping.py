@@ -11,8 +11,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from rapidfuzz import fuzz
-from .schema import Schema, FieldSpec
-from .ingest import profile_column
+from app.agent.schema import Schema, FieldSpec
+from app.agent.ingest import profile_column
 
 AUTO = 0.80      # confident enough to apply without asking
 MARGIN = 0.15    # runner-up must be at least this far behind
@@ -79,7 +79,7 @@ def _content_score(samples: list[str], spec: FieldSpec) -> tuple[float, str]:
     if t == "number":
         f = frac(_NUM); return f, f"{int(f*100)}% of values are numeric"
     if t == "enum":
-        from .cleaning import clean_enum
+        from app.agent.cleaning import clean_enum
         hits = sum(1 for s in samples if clean_enum(spec.name, s, spec.values)[0] is not None)
         f = hits / len(samples); return f, f"{int(f*100)}% of values match allowed {spec.name} values"
     if t == "string":

@@ -11,18 +11,25 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .agent.schema import load_schema
-from .agent.memory import Memory
-from .agent.llm import LLM
-from .agent.runner import Agent, RunResult
-from . import mock_target
+from app.agent.schema import load_schema
+from app.agent.memory import Memory
+from app.agent.llm import LLM
+from app.agent.runner import Agent, RunResult
+from app import mock_target
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(os.getenv("MIGRATION_SCHEMA", ROOT / "target_schema.yaml"))
 DATA_DIR = Path(os.getenv("MIGRATION_DATA", ROOT / "sample_data"))
-UPLOAD_DIR = ROOT / ".uploads"
-STATE_DIR = ROOT / ".state"
-STEP_DELAY = float(os.getenv("MIGRATION_STEP_DELAY", "0.35"))   # slows the first run so the live feed is watchable
+ON_VERCEL = bool(os.getenv("VERCEL"))
+_WRITABLE = Path("/tmp/migration-agent") if ON_VERCEL else ROOT
+UPLOAD_DIR = _WRITABLE / ".uploads"
+STATE_DIR = _WRITABLE / ".state"
+# Locally the run happens in a background thread with a small delay per step so the live feed is
+# watchable. On serverless there is no background thread: the run is synchronous (< 1 s) and the
+# UI replays the events with a stagger instead.
+SYNC_RUN = ON_VERCEL or os.getenv("MIGRATION_SYNC_RUN") == "1"
+STEP_DELAY = 0.0 if SYNC_RUN else float(os.getenv("MIGRATION_STEP_DELAY", "0.35"))
+REPO_URL = os.getenv("MIGRATION_REPO_URL", "https://github.com/maddivikash/migration-agent")
 
 app = FastAPI(title="Migration Agent", version="0.1")
 app.include_router(mock_target.router)
@@ -114,13 +121,16 @@ def start_run(req: RunRequest):
             raise HTTPException(404, f"file not found: {n}")
         paths.append(str(p))
     S.files = [Path(p).name for p in paths]
+    if SYNC_RUN:
+        _run(paths, 0.0)
+        return {"status": "done", "files": S.files}
     threading.Thread(target=_run, args=(paths, STEP_DELAY), daemon=True).start()
     return {"status": "started", "files": S.files}
 
 
 @app.post("/api/upload")
 async def upload(file: UploadFile):
-    UPLOAD_DIR.mkdir(exist_ok=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     dest = UPLOAD_DIR / Path(file.filename).name
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -148,7 +158,8 @@ def get_state():
     return {"status": S.status, "files": S.files, "run_no": S.run_no, "stats": stats,
             "llm": {"available": llm.available, "detail": llm.detail, "model": llm.model},
             "memory": memory.summary(), "schema": {"entity": schema.entity, "fields": schema.pushed_fields},
-            "target_count": len(mock_target.STORE), "events": len(S.events)}
+            "target_count": len(mock_target.STORE), "events": len(S.events),
+            "deployment": {"serverless": ON_VERCEL, "sync_run": SYNC_RUN, "repo": REPO_URL, "target": TARGET_BASE}}
 
 
 @app.get("/api/events")
@@ -280,7 +291,32 @@ def override_mapping(o: Override):
 
 
 # ------------------------------------------------------------------ push / retry / rollback
-TARGET_BASE = os.getenv("MIGRATION_TARGET_URL", "http://127.0.0.1:8000/target")
+# "internal" calls the stub in-process (needed on serverless, where a self-HTTP call may land on another
+# instance with its own store). Locally the default is a real HTTP hop, so swapping in the client's real
+# API is a one-line change.
+TARGET_BASE = os.getenv("MIGRATION_TARGET_URL", "internal" if ON_VERCEL else "http://127.0.0.1:8000/target")
+
+
+class TargetClient:
+    """Uniform (status_code, json) interface over the stub, via HTTP or in-process."""
+    def __init__(self, base: str):
+        self.base = base
+        self.http = None if base == "internal" else httpx.Client(timeout=10)
+
+    def put(self, emp_id: str, payload: dict) -> tuple[int, dict]:
+        if self.http is None:
+            return mock_target.upsert_record(emp_id, payload)
+        r = self.http.put(f"{self.base}/employees/{emp_id}", json=payload)
+        return r.status_code, (r.json() if r.content else {})
+
+    def delete(self, emp_id: str) -> tuple[int, dict]:
+        if self.http is None:
+            return mock_target.delete_record(emp_id)
+        r = self.http.delete(f"{self.base}/employees/{emp_id}")
+        return r.status_code, (r.json() if r.content else {})
+
+    def close(self):
+        if self.http: self.http.close()
 
 
 def _payload(r) -> dict:
@@ -333,7 +369,8 @@ def push(req: PushRequest):
         S.emit("push", f"DEFER {r.fields.get('employee_id')} ({r.fields.get('first_name')} {r.fields.get('last_name')}): "
                        f"manager {m.key} is {m.status}; will push once the manager is in the target", {"key": r.key, "manager": m.key})
     ok = fail = 0
-    with httpx.Client(timeout=10) as client:
+    client = TargetClient(TARGET_BASE)
+    try:
         for r in recs:
             payload = _payload(r)
             if req.mode == "retry_without_manager" and r.push and "manager_email" in (r.push.get("last_error") or ""):
@@ -343,17 +380,17 @@ def push(req: PushRequest):
             emp_id = payload.get("employee_id") or r.key
             entry = {"ts": now(), "key": r.key, "employee_id": emp_id, "action": "upsert", "payload": payload}
             try:
-                resp = client.put(f"{TARGET_BASE}/employees/{emp_id}", json=payload)
-                entry["http"] = resp.status_code
-                if resp.status_code < 300:
+                code, body = client.put(emp_id, payload)
+                entry["http"] = code
+                if code < 300:
                     r.status = "pushed"; ok += 1
-                    r.push = {"attempts": (r.push or {}).get("attempts", 0) + 1, "last_error": None, "employee_id": emp_id, "result": resp.json().get("status")}
+                    r.push = {"attempts": (r.push or {}).get("attempts", 0) + 1, "last_error": None, "employee_id": emp_id, "result": body.get("status")}
                     entry["outcome"] = "success"
                 else:
                     r.status = "failed"; fail += 1
-                    err = resp.json().get("detail", resp.text)
+                    err = body.get("detail", str(body))
                     r.push = {"attempts": (r.push or {}).get("attempts", 0) + 1, "last_error": err, "employee_id": emp_id,
-                              "retryable": resp.status_code >= 500}
+                              "retryable": code >= 500}
                     entry["outcome"], entry["error"] = "failed", err
             except httpx.HTTPError as e:
                 r.status = "failed"; fail += 1
@@ -363,6 +400,8 @@ def push(req: PushRequest):
             S.push_log.append(entry)
             S.emit("push", f"{'OK ' if entry['outcome']=='success' else 'FAIL'} {emp_id} ({r.fields.get('first_name')} {r.fields.get('last_name')})"
                            + (f": {entry.get('error')}" if entry.get("error") else ""), entry)
+    finally:
+        client.close()
     S.emit("push", f"Push finished: {ok} succeeded, {fail} failed, {len(deferred)} deferred (manager not yet migrated)", {"ok": ok, "failed": fail, "deferred": len(deferred)})
     return {"ok": ok, "failed": fail, "deferred": len(deferred)}
 
@@ -381,18 +420,21 @@ def rollback(req: RollbackRequest):
     recs = list(reversed(_ordered(recs)))
     S.emit("rollback", f"Rolling back {len(recs)} record(s) from target", {})
     n = 0
-    with httpx.Client(timeout=10) as client:
+    client = TargetClient(TARGET_BASE)
+    try:
         for r in recs:
             emp_id = r.push["employee_id"]
-            resp = client.delete(f"{TARGET_BASE}/employees/{emp_id}")
-            entry = {"ts": now(), "key": r.key, "employee_id": emp_id, "action": "delete", "http": resp.status_code,
-                     "outcome": "success" if resp.status_code < 300 or resp.status_code == 404 else "failed"}
+            code, _ = client.delete(emp_id)
+            entry = {"ts": now(), "key": r.key, "employee_id": emp_id, "action": "delete", "http": code,
+                     "outcome": "success" if code < 300 or code == 404 else "failed"}
             if entry["outcome"] == "success":
                 r.status = "rolled_back"; n += 1
                 r.push = {**r.push, "rolled_back_at": entry["ts"]}
                 S.record_status[r.key] = {"status": "rolled_back", **r.push}
             S.push_log.append(entry)
             S.emit("rollback", f"Removed {emp_id} from target", entry)
+    finally:
+        client.close()
     S.emit("rollback", f"Rollback finished: {n} record(s) removed", {"count": n})
     return {"rolled_back": n}
 

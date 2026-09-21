@@ -55,6 +55,8 @@ class State:
         self.push_log: list[dict] = []       # every call to the target, with outcome
         self.record_status: dict[str, dict] = {}   # key -> {status, attempts, last_error, pushed_payload}
         self.run_no = 0
+        self.version = 0      # bumped on every mutation; lets a client tell a stale instance apart
+        self.epoch = 0        # bumped when a run resets everything; tells the UI to clear its feed
 
     def emit(self, kind: str, message: str, details: dict):
         with self.lock:
@@ -62,6 +64,74 @@ class State:
 
 
 S = State()
+
+
+def bump():
+    S.version += 1
+
+
+def _paths(names: list[str]) -> list[str]:
+    return [str(UPLOAD_DIR / n if (UPLOAD_DIR / n).exists() else DATA_DIR / n) for n in names]
+
+
+# ---------------------------------------------------------------- session sync (serverless safety)
+# The browser holds a copy of the whole session. Every request carries the version it last saw; an
+# instance that is behind (fresh cold start, or a sibling instance that never saw this run) asks for the
+# full session, adopts it and rebuilds the derived state. A run is a pure function of
+# (files, decisions), so rebuilding is exact - no half-applied state can leak in.
+def export_session() -> dict:
+    return {"v": S.version, "epoch": S.epoch, "files": S.files, "run_no": S.run_no, "events": S.events,
+            "decisions": S.decisions, "decision_log": S.decision_log, "push_log": S.push_log,
+            "record_status": S.record_status,
+            "target": {"store": mock_target.STORE, "attempts": mock_target.ATTEMPTS}, "memory": memory.data}
+
+
+def _rebuild():
+    """Recompute the derived state (records, escalations) from files + decisions, without emitting events."""
+    if not S.files:
+        S.result = None; S.status = "idle"; return
+    ag = Agent(schema, memory, llm, lambda *a: None, dict(S.decisions), step_delay=0.0)
+    res = ag.run(_paths(S.files))
+    _merge_push_status(res)
+    S.result = res; S.status = "done"
+
+
+def hydrate(sess: dict | None):
+    if not sess or sess.get("v", 0) <= S.version or S.status == "running":
+        return False
+    with S.lock:
+        S.files = list(sess.get("files", [])); S.run_no = sess.get("run_no", 0)
+        S.events = list(sess.get("events", [])); S.decisions = dict(sess.get("decisions", {}))
+        S.decision_log = list(sess.get("decision_log", [])); S.push_log = list(sess.get("push_log", []))
+        S.record_status = dict(sess.get("record_status", {}))
+        S.version, S.epoch = sess["v"], sess.get("epoch", 0)
+        tgt = sess.get("target", {})
+        mock_target.STORE.clear(); mock_target.STORE.update(tgt.get("store", {}))
+        mock_target.ATTEMPTS.clear(); mock_target.ATTEMPTS.update(tgt.get("attempts", {}))
+        if sess.get("memory"):
+            memory.data = sess["memory"]
+    if S.run_no:
+        _rebuild()
+    else:
+        S.result = None; S.status = "idle"
+    return True
+
+
+def stale(v: int | None) -> bool:
+    """True when the client has seen a newer version than this instance holds."""
+    return v is not None and v > S.version and S.status != "running"
+
+
+class SessionBody(BaseModel):
+    v: int | None = None
+    session: dict | None = None
+
+
+def _merge_push_status(res: RunResult):
+    for r in res.records:
+        st = S.record_status.get(r.key)
+        if st and st["status"] in ("pushed", "failed", "rolled_back"):
+            r.status, r.push = st["status"], {k: v for k, v in st.items() if k != "status"}
 
 
 def _agent(delay: float) -> Agent:
@@ -74,13 +144,10 @@ def _run(files: list[str], delay: float):
     try:
         res = _agent(delay).run(files)
         with S.lock:
-            # keep push status for records that already went out
-            for r in res.records:
-                st = S.record_status.get(r.key)
-                if st and st["status"] in ("pushed", "failed", "rolled_back"):
-                    r.status, r.push = st["status"], {k: v for k, v in st.items() if k != "status"}
+            _merge_push_status(res)   # keep push status for records that already went out
             S.result = res
             S.status = "done"
+            bump()
     except Exception as e:  # noqa: BLE001
         S.status = "error"
         S.emit("error", f"Agent crashed: {type(e).__name__}: {e}", {})
@@ -100,7 +167,7 @@ def default_file_order() -> list[str]:
 
 
 # ------------------------------------------------------------------ run control
-class RunRequest(BaseModel):
+class RunRequest(SessionBody):
     files: list[str] | None = None        # names inside sample_data / uploads; default = all sample files
     reset: bool = True
 
@@ -109,9 +176,15 @@ class RunRequest(BaseModel):
 def start_run(req: RunRequest):
     if S.status == "running":
         raise HTTPException(409, "a run is already in progress")
+    if stale(req.v) and not req.session:
+        return {"need_session": True}
+    hydrate(req.session)
     if req.reset:
+        v, ep = S.version, S.epoch
         S.__init__()
+        S.version, S.epoch = v, ep + 1
         mock_target.reset()
+        memory.data = {"column_mappings": memory.data.get("column_mappings", {}), "enum_values": memory.data.get("enum_values", {})}
     llm.probe()
     names = req.files or default_file_order()
     paths = []
@@ -123,7 +196,7 @@ def start_run(req: RunRequest):
     S.files = [Path(p).name for p in paths]
     if SYNC_RUN:
         _run(paths, 0.0)
-        return {"status": "done", "files": S.files}
+        return {"status": "done", "files": S.files, "session": export_session()}
     threading.Thread(target=_run, args=(paths, STEP_DELAY), daemon=True).start()
     return {"status": "started", "files": S.files}
 
@@ -155,7 +228,7 @@ def get_state():
             counts[r.status] = counts.get(r.status, 0) + 1
         stats["by_status"] = counts
         stats["open_escalations"] = sum(1 for e in res.escalations if e.status == "open")
-    return {"status": S.status, "files": S.files, "run_no": S.run_no, "stats": stats,
+    return {"status": S.status, "files": S.files, "run_no": S.run_no, "v": S.version, "epoch": S.epoch, "stats": stats,
             "llm": {"available": llm.available, "detail": llm.detail, "model": llm.model},
             "memory": memory.summary(), "schema": {"entity": schema.entity, "fields": schema.pushed_fields},
             "target_count": len(mock_target.STORE), "events": len(S.events),
@@ -167,6 +240,28 @@ def get_events(since: int = 0, limit: int = 500):
     with S.lock:
         evs = [e for e in S.events if e["seq"] > since][:limit]
     return {"events": evs, "status": S.status}
+
+
+class SyncRequest(SessionBody):
+    since: int = 0
+
+
+@app.post("/api/sync")
+def sync(req: SyncRequest):
+    """Everything the UI needs in one round trip. Also the hydration point for a stale instance."""
+    if stale(req.v) and not req.session:
+        return {"need_session": True, "v": S.version}
+    hydrate(req.session)
+    with S.lock:
+        events = [e for e in S.events if e["seq"] > req.since]
+    out = {"state": get_state(), "events": events, "event_count": len(S.events)}
+    if S.status != "running":
+        out["escalations"] = get_escalations()
+        out["mappings"] = S.result.mappings if S.result else {}
+        out["records"] = get_records()["records"]
+    if req.v is None or req.v != S.version:
+        out["session"] = export_session()   # client is behind: hand it the authoritative copy
+    return out
 
 
 @app.get("/api/schema")
@@ -232,7 +327,7 @@ def get_escalations():
     return {"open": open_, "resolved": resolved}
 
 
-class Decision(BaseModel):
+class Decision(SessionBody):
     value: Any = None                    # option value
     values: dict[str, Any] | None = None # free-text multi-field correction
     note: str = ""
@@ -243,6 +338,9 @@ class Decision(BaseModel):
 def decide(eid: str, d: Decision):
     if S.status == "running":
         raise HTTPException(409, "wait for the current run to finish")
+    if stale(d.v) and not d.session:
+        return {"need_session": True}
+    hydrate(d.session)
     if not S.result:
         raise HTTPException(400, "no run yet")
     e = next((e for e in S.result.escalations if e.id == eid), None)
@@ -260,12 +358,11 @@ def decide(eid: str, d: Decision):
     S.emit("human", f"Consultant resolved: {e.title} -> {d.values or d.value}" + (f' ("{d.note}")' if d.note else ""),
            {"id": eid, "decision": decision})
     # re-run instantly (no step delay) so the new state is a pure function of decisions
-    paths = [str(UPLOAD_DIR / n if (UPLOAD_DIR / n).exists() else DATA_DIR / n) for n in S.files]
-    _run(paths, 0.0)
-    return {"status": "ok", "state": get_state()}
+    _run(_paths(S.files), 0.0)
+    return {"status": "ok", "state": get_state(), "session": export_session()}
 
 
-class Override(BaseModel):
+class Override(SessionBody):
     file: str
     column: str
     target: str | None       # None = drop
@@ -276,6 +373,9 @@ def override_mapping(o: Override):
     """Consultant changes a mapping the agent made confidently. Treated exactly like a decision."""
     if S.status == "running":
         raise HTTPException(409, "wait for the current run to finish")
+    if stale(o.v) and not o.session:
+        return {"need_session": True}
+    hydrate(o.session)
     eid = f"map:{o.file}:{o.column}"
     decision = {"value": o.target or "__drop__", "values": None, "note": "manual override", "by": "consultant", "ts": now()}
     S.decisions[eid] = decision
@@ -285,9 +385,8 @@ def override_mapping(o: Override):
                            "decision": decision})
     memory.remember_column(o.column, o.target)
     S.emit("human", f"Consultant overrode mapping: {o.file} '{o.column}' -> {o.target or 'DROP'}", {"id": eid})
-    paths = [str(UPLOAD_DIR / n if (UPLOAD_DIR / n).exists() else DATA_DIR / n) for n in S.files]
-    _run(paths, 0.0)
-    return {"status": "ok"}
+    _run(_paths(S.files), 0.0)
+    return {"status": "ok", "session": export_session()}
 
 
 # ------------------------------------------------------------------ push / retry / rollback
@@ -336,13 +435,16 @@ def _ordered(records):
     return out
 
 
-class PushRequest(BaseModel):
+class PushRequest(SessionBody):
     keys: list[str] | None = None   # default: every 'ready' record
     mode: str = "push"              # push | retry | retry_without_manager
 
 
 @app.post("/api/push")
 def push(req: PushRequest):
+    if stale(req.v) and not req.session:
+        return {"need_session": True}
+    hydrate(req.session)
     if not S.result or S.status == "running":
         raise HTTPException(409, "no finished run")
     want = set(req.keys or [])
@@ -403,15 +505,19 @@ def push(req: PushRequest):
     finally:
         client.close()
     S.emit("push", f"Push finished: {ok} succeeded, {fail} failed, {len(deferred)} deferred (manager not yet migrated)", {"ok": ok, "failed": fail, "deferred": len(deferred)})
-    return {"ok": ok, "failed": fail, "deferred": len(deferred)}
+    bump()
+    return {"ok": ok, "failed": fail, "deferred": len(deferred), "session": export_session()}
 
 
-class RollbackRequest(BaseModel):
+class RollbackRequest(SessionBody):
     keys: list[str] | None = None
 
 
 @app.post("/api/rollback")
 def rollback(req: RollbackRequest):
+    if stale(req.v) and not req.session:
+        return {"need_session": True}
+    hydrate(req.session)
     if not S.result:
         raise HTTPException(409, "no run")
     want = set(req.keys or [])
@@ -436,17 +542,23 @@ def rollback(req: RollbackRequest):
     finally:
         client.close()
     S.emit("rollback", f"Rollback finished: {n} record(s) removed", {"count": n})
-    return {"rolled_back": n}
+    bump()
+    return {"rolled_back": n, "session": export_session()}
 
 
 @app.post("/api/records/{key}/reset")
-def reset_record(key: str):
+def reset_record(key: str, body: SessionBody | None = None):
     """Put a rolled-back / failed record back into the ready queue."""
+    body = body or SessionBody()
+    if stale(body.v) and not body.session:
+        return {"need_session": True}
+    hydrate(body.session)
     r = next((r for r in (S.result.records if S.result else []) if r.key == key), None)
     if not r:
         raise HTTPException(404)
     r.status = "ready"; r.push = None; S.record_status.pop(key, None)
-    return {"status": "ready"}
+    bump()
+    return {"status": "ready", "session": export_session()}
 
 
 # ------------------------------------------------------------------ audit
@@ -481,7 +593,8 @@ def get_memory():
 @app.delete("/api/memory")
 def clear_memory():
     memory.data = {"column_mappings": {}, "enum_values": {}}; memory.save()
-    return {"status": "cleared"}
+    bump()
+    return {"status": "cleared", "session": export_session()}
 
 
 # ------------------------------------------------------------------ UI

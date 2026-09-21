@@ -3,11 +3,33 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = v => v === null || v === undefined || v === "" ? '<span class="muted">—</span>' : esc(v);
 let queueSig = "", mapSig = "";
+let seenV = -1, seenEpoch = null, pollTimer = null, booted = false, failures = 0;
 let lastSeq = 0, state = {}, escalations = {open: [], resolved: []}, mappings = {}, records = [], schema = null, activeTab = "live";
-const api = async (path, opts = {}) => {
-  const r = await fetch(path, {headers: {"Content-Type": "application/json"}, ...opts});
+/* ---- session: the browser is the source of truth. Serverless instances may be fresh or stale;
+   every mutating call carries the version we last saw, and an instance that is behind asks for the
+   full session (need_session) which we then send along. Persisted so a reload keeps the run. ---- */
+let session = null;
+try { session = JSON.parse(sessionStorage.getItem("migration-session") || "null"); } catch (e) { session = null; }
+const saveSession = sess => { if (!sess) return; if (session && sess.v < session.v) return; session = sess; try { sessionStorage.setItem("migration-session", JSON.stringify(sess)); } catch (e) {} };
+let inflight = 0;
+const prog = () => {
+  const el = document.getElementById("progress");
+  if (!el) return;
+  if (inflight > 0) { el.classList.add("on"); el.style.width = "70%"; }
+  else { el.style.width = "100%"; setTimeout(() => { el.classList.remove("on"); el.style.width = "0"; }, 250); }
+};
+const api = async (path, opts = {}, withSession = false) => {
+  const body = opts.body ? JSON.parse(opts.body) : {};
+  if (opts.method === "POST") { body.v = session ? session.v : null; if (withSession && session) body.session = session; opts = {...opts, body: JSON.stringify(body)}; }
+  inflight++; prog();
+  let r;
+  try { r = await fetch(path, {headers: {"Content-Type": "application/json"}, ...opts}); }
+  finally { inflight--; prog(); }
   if (!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); }
-  return r.json();
+  const j = await r.json();
+  if (j && j.need_session && !withSession) return api(path, opts, true);
+  if (j && j.session) saveSession(j.session);
+  return j;
 };
 const toast = msg => { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 3500); };
 
@@ -15,37 +37,44 @@ const toast = msg => { const t = $("#toast"); t.textContent = msg; t.classList.r
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x.id === "tab-" + b.dataset.tab));
-  activeTab = b.dataset.tab; render();
+  activeTab = b.dataset.tab; render(true);
 });
-function go(tab) { document.querySelector(`.tabs button[data-tab=${tab}]`).click(); location.hash = tab; }
+function go(tab) { document.querySelector(`.tabs button[data-tab=${tab}]`).click(); history.replaceState(null, "", "#" + tab); }
 if (location.hash && document.querySelector(`.tabs button[data-tab=${location.hash.slice(1)}]`)) go(location.hash.slice(1));
 
-/* ---------------- polling ---------------- */
+/* ---------------- polling: one request, render only when the version changes ---------------- */
 async function poll() {
+  clearTimeout(pollTimer);
   try {
-    state = await api("/api/state");
-    const ev = await api(`/api/events?since=${lastSeq}`);
-    if (ev.events.length) { appendEvents(ev.events); lastSeq = ev.events[ev.events.length - 1].seq; }
-
-    if (state.status !== "running") {
-      [escalations, mappings, records] = await Promise.all([api("/api/escalations"), api("/api/mappings").then(m => m.mappings), api("/api/records").then(r => r.records)]);
-    }
-    renderHeader(); render();
-  } catch (e) { console.error(e); }
-  setTimeout(poll, state.status === "running" ? 400 : 1500);
+    const j = await api("/api/sync", {method: "POST", body: JSON.stringify({since: lastSeq})});
+    state = j.state;
+    if (seenEpoch !== null && state.epoch !== seenEpoch) { lastSeq = 0; pendingEvents.length = 0; $("#feed").innerHTML = ""; }
+    seenEpoch = state.epoch;
+    if (j.events.length) { appendEvents(j.events); lastSeq = j.events[j.events.length - 1].seq; }
+    if (j.escalations) { escalations = j.escalations; mappings = j.mappings; records = j.records; }
+    failures = 0;
+    const first = !booted; booted = true; document.body.classList.add("booted");
+    renderHeader();
+    if (first || state.v !== seenV || state.status === "running") { seenV = state.v; render(); }
+  } catch (e) {
+    failures++; console.error(e);
+    if (failures === 2) toast("Trouble reaching the server, retrying…");
+  }
+  // poll fast while the agent works, slowly when idle, and back off if the server is unreachable
+  const gap = state.status === "running" ? 400 : (failures ? Math.min(2000 * failures, 10000) : 4000);
+  pollTimer = setTimeout(poll, gap);
 }
 if (!schema) api("/api/schema").then(s => schema = s);
-
 /* ---------------- header ---------------- */
 let sawRun = false;
 function renderHeader() {
   $("#statusDot").className = "dot " + state.status;
   if (state.run_no > 0) sawRun = true;
   const banner = $("#banner");
-  if (sawRun && state.run_no === 0) { banner.textContent = "This demo runs on a serverless instance that restarted, so the in-memory run state was cleared. Click Run agent to start again (mapping memory is kept per instance)."; banner.classList.remove("hidden"); }
-  else banner.classList.add("hidden");
+  banner.classList.add("hidden");
   const s = state.stats || {}, bs = s.by_status || {};
   const stat = (v, l) => `<div class="stat"><b>${v ?? "–"}</b><span>${l}</span></div>`;
+  if (!booted) return;
   $("#stats").innerHTML = state.run_no ? stat(s.source_rows, "source rows") + stat(s.unique_people, "people") + stat(s.auto_fixes, "auto fixes") +
     stat(bs.ready ?? 0, "ready") + stat(bs.held ?? 0, "held") + stat(bs.pushed ?? 0, "pushed") + stat(bs.failed ?? 0, "failed") + stat(state.target_count, "in target") : "";
   const n = escalations.open.length; const b = $("#queueBadge"); b.textContent = n; b.classList.toggle("zero", n === 0);
@@ -65,7 +94,7 @@ function appendEvents(evs) {
   if (!drainTimer) drain();
 }
 function drain() {
-  const feed = $("#feed"); if ($(".empty", feed) || $(".hero", feed)) feed.innerHTML = "";
+  const feed = $("#feed"); if ($(".empty", feed) || $(".hero", feed) || $(".boot", feed)) feed.innerHTML = "";
   // a burst (synchronous run on serverless) is replayed with a short stagger so the agent's steps are readable
   const n = pendingEvents.length > 8 ? 1 : pendingEvents.length;
   for (let i = 0; i < n && pendingEvents.length; i++) {
@@ -109,6 +138,7 @@ function dupHtml(e) {
 }
 function renderQueue() {
   const q = $("#queue");
+  if (!booted) return;
   // only rebuild when the set of escalations changed - otherwise a poll would wipe what the consultant is typing
   const sig = escalations.open.map(e => e.id).join("|") + "#" + escalations.resolved.length + "#" + state.run_no;
   if (sig === queueSig) return; queueSig = sig;
@@ -136,13 +166,14 @@ function renderQueue() {
   $("#resolved").innerHTML = escalations.resolved.slice().reverse().map(e => `<div class="item"><b>${esc(e.title)}</b><span>→ ${esc(JSON.stringify(e.resolution?.values || e.resolution?.value))}${e.resolution?.note ? ` · “${esc(e.resolution.note)}”` : ""}</span></div>`).join("") || '<div class="muted small">none yet</div>';
 }
 async function decide(id, body) {
-  try { toast("Applying decision and re-running the agent…"); await api(`/api/escalations/${encodeURIComponent(id)}/decide`, {method: "POST", body: JSON.stringify(body)}); toast("Decision applied"); }
+  try { toast("Applying decision and re-running the agent…"); await api(`/api/escalations/${encodeURIComponent(id)}/decide`, {method: "POST", body: JSON.stringify(body)}); toast("Decision applied"); poll(); }
   catch (e) { toast("Failed: " + e.message); }
 }
 
 /* ---------------- mappings ---------------- */
 function renderMappings() {
-  const el = $("#mappings"); const files = Object.keys(mappings);
+  const el = $("#mappings"); if (!booted) return;
+  const files = Object.keys(mappings);
   const sig = JSON.stringify(Object.values(mappings).flat().map(m => [m.source_column, m.target, m.status])) + state.run_no;
   if (sig === mapSig) return; mapSig = sig;
   if (!files.length) return el.innerHTML = '<div class="card"><div class="empty">Run the agent first.</div></div>';
@@ -154,15 +185,18 @@ function renderMappings() {
       <td><span class="conf"><i style="width:${Math.round(m.confidence * 100)}%"></i></span><span class="small muted">${Math.round(m.confidence * 100)}%</span></td>
       <td><span class="tag ${m.status}">${m.status === "auto" ? "agent" : m.status === "human" ? "you" : m.status}</span></td><td class="small muted">${esc(m.note)}</td></tr>`).join("")}</tbody></table></div>`).join("");
   el.querySelectorAll("select.map").forEach(s => s.onchange = async () => {
-    try { toast("Applying override…"); await api("/api/mappings/override", {method: "POST", body: JSON.stringify({file: s.dataset.file, column: s.dataset.col, target: s.value || null})}); toast("Mapping updated, agent re-ran"); }
+    try { toast("Applying override…"); await api("/api/mappings/override", {method: "POST", body: JSON.stringify({file: s.dataset.file, column: s.dataset.col, target: s.value || null})}); toast("Mapping updated, agent re-ran"); poll(); }
     catch (e) { toast("Failed: " + e.message); }
   });
 }
 
 /* ---------------- records ---------------- */
 function renderRecords() {
+  if (!booted) return;
   const q = $("#recSearch").value.toLowerCase(), st = $("#recStatus").value;
   const rows = records.filter(r => (!st || r.status === st) && (!q || JSON.stringify(r.fields).toLowerCase().includes(q)));
+  const sig = q + "|" + st + "|" + state.v + "|" + rows.map(r => r.key + r.status).join(",");
+  if (sig === recordsSig) return; recordsSig = sig;
   const cols = ["employee_id", "first_name", "last_name", "email", "department", "hire_date", "status"];
   $("#records").innerHTML = rows.length ? `<table><thead><tr><th>Status</th>${cols.map(c => `<th>${c}</th>`).join("")}<th>Fixes</th><th>Sources</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr class="clickable" data-key="${esc(r.key)}"><td><span class="tag ${r.status}">${r.status}</span>${r.push && r.push.last_error ? `<div class="small" style="color:var(--bad)">${esc(r.push.last_error)}</div>` : ""}</td>
@@ -177,7 +211,7 @@ function renderRecords() {
     on("[data-go-queue]", () => go("queue"));
     on("[data-retry]", () => pushCall({keys: [k], mode: "retry"}));
     on("[data-rollback]", () => rollbackCall({keys: [k]}));
-    on("[data-reset]", async () => { await api(`/api/records/${encodeURIComponent(k)}/reset`, {method: "POST"}); toast("Record re-queued as ready"); });
+    on("[data-reset]", async () => { await api(`/api/records/${encodeURIComponent(k)}/reset`, {method: "POST", body: "{}"}); toast("Record re-queued as ready"); poll(); });
   });
 }
 $("#recSearch").oninput = renderRecords; $("#recStatus").onchange = renderRecords;
@@ -203,7 +237,8 @@ $("#drawer").onclick = e => { if (e.target.id === "drawer") closeDrawer(); };
 
 /* ---------------- audit ---------------- */
 async function renderAudit() {
-  const a = await api("/api/audit");
+  if (!booted) return;
+  const a = await api("/api/sync", {method: "POST", body: JSON.stringify({since: 0})}).then(j => ({events: j.events, decisions: (j.session || session || {}).decision_log || [], push_log: (j.session || session || {}).push_log || []}));
   const dec = a.decisions || [], pl = a.push_log || [];
   $("#audit").innerHTML = `
     <h3 class="section">Human decisions (${dec.length})</h3>
@@ -216,11 +251,13 @@ async function renderAudit() {
 
 /* ---------------- actions ---------------- */
 $("#btnRun").onclick = async () => {
-  try { lastSeq = 0; pendingEvents.length = 0; $("#feed").innerHTML = ""; await api("/api/run", {method: "POST", body: JSON.stringify({files: null, reset: true})}); go("live"); }
-  catch (e) { toast("Failed: " + e.message); }
+  const hero = $(".hero"); if (hero) hero.classList.add("busy");
+  $("#btnRun").disabled = true;
+  try { lastSeq = 0; pendingEvents.length = 0; $("#feed").innerHTML = '<div class="boot"><span class="spin"></span> Agent starting — reading the source files…</div>'; seenEpoch = null; const j = await api("/api/run", {method: "POST", body: JSON.stringify({files: null, reset: true})}); if (j.session) { saveSession(j.session); } go("live"); poll(); }
+  catch (e) { toast("Failed: " + e.message); $("#btnRun").disabled = false; }
 };
-async function pushCall(body) { try { toast("Pushing to target…"); const r = await api("/api/push", {method: "POST", body: JSON.stringify(body)}); toast(`Push done: ${r.ok} ok, ${r.failed} failed${r.deferred ? `, ${r.deferred} deferred until their manager is migrated` : ""}`); go("records"); } catch (e) { toast("Failed: " + e.message); } }
-async function rollbackCall(body) { if (!confirm("Remove these records from the target system?")) return; try { const r = await api("/api/rollback", {method: "POST", body: JSON.stringify(body)}); toast(`Rolled back ${r.rolled_back} record(s)`); } catch (e) { toast("Failed: " + e.message); } }
+async function pushCall(body) { try { toast("Pushing to target…"); const r = await api("/api/push", {method: "POST", body: JSON.stringify(body)}); toast(`Push done: ${r.ok} ok, ${r.failed} failed${r.deferred ? `, ${r.deferred} deferred until their manager is migrated` : ""}`); go("records"); poll(); } catch (e) { toast("Failed: " + e.message); } }
+async function rollbackCall(body) { if (!confirm("Remove these records from the target system?")) return; try { const r = await api("/api/rollback", {method: "POST", body: JSON.stringify(body)}); toast(`Rolled back ${r.rolled_back} record(s)`); poll(); } catch (e) { toast("Failed: " + e.message); } }
 $("#btnPush").onclick = () => pushCall({mode: "push"});
 $("#btnRetry").onclick = () => pushCall({mode: "retry"});
 $("#btnRetryNoMgr").onclick = () => pushCall({mode: "retry_without_manager"});
@@ -230,11 +267,12 @@ $("#fileInput").onchange = async e => {
   toast(`${e.target.files.length} file(s) uploaded; they will be included in the next run`); e.target.value = "";
 };
 
-function render() {
+let auditV = -1, recordsSig = "";
+function render(tabSwitch = false) {
   if (activeTab === "queue") renderQueue();
   else if (activeTab === "mappings") renderMappings();
   else if (activeTab === "records") renderRecords();
-  else if (activeTab === "audit") renderAudit();
+  else if (activeTab === "audit") { if (auditV !== state.v) { auditV = state.v; renderAudit(); } }
   // keep the badge fresh regardless of tab
   const n = escalations.open.length; const b = $("#queueBadge"); b.textContent = n; b.classList.toggle("zero", n === 0);
 }

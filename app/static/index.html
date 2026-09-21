@@ -11,9 +11,10 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<div id="progress"></div>
 <header>
   <div class="brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#e4e4e7" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h16"/></svg></span>Migration Agent <span class="sub">employees → new HR platform</span> <span class="dot" id="statusDot" title="agent status"></span></div>
-  <div class="stats" id="stats"></div>
+  <div class="stats" id="stats"><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div><div class="stat sk-stat"><b><span class="sk"></span></b><span><span class="sk"></span></span></div></div>
   <div class="actions">
     <button id="btnRun" class="primary">▶ Run agent</button>
     <button id="btnPush">⇪ Push ready records</button>
@@ -66,7 +67,7 @@
 
   <section id="tab-queue" class="tab">
     <div class="split">
-      <div id="queue" class="queue"></div>
+      <div id="queue" class="queue"><div class="sk-card"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-card"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div></div>
       <aside class="side">
         <h3>Resolved <span class="muted" id="resolvedCount"></span></h3>
         <div id="resolved" class="resolved"></div>
@@ -74,7 +75,7 @@
     </div>
   </section>
 
-  <section id="tab-mappings" class="tab"><div id="mappings"></div></section>
+  <section id="tab-mappings" class="tab"><div id="mappings"><div class="sk-table"><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div></div></div></section>
 
   <section id="tab-records" class="tab">
     <div class="toolbar">
@@ -85,7 +86,7 @@
       <button id="btnRetryNoMgr" title="For records the target rejected because the manager doesn't exist there yet">↻ Retry failed without manager</button>
       <button id="btnRollback" class="danger">⟲ Roll back all pushed</button>
     </div>
-    <div id="records"></div>
+    <div id="records"><div class="sk-table"><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div></div></div>
   </section>
 
   <section id="tab-audit" class="tab">
@@ -95,7 +96,7 @@
       <a class="button" href="/api/audit.csv" download>⤓ Changes CSV</a>
       <a class="button" href="/api/audit" target="_blank">⤓ Full audit JSON</a>
     </div>
-    <div id="audit"></div>
+    <div id="audit"><div class="sk-table"><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div><div class="sk-row"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></div></div></div>
   </section>
 </main>
 

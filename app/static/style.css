@@ -122,3 +122,20 @@ h3.section{margin:22px 0 10px;font-size:11px;text-transform:uppercase;letter-spa
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#f4f4f5;color:#0a0a0a;padding:10px 16px;border-radius:10px;z-index:30;max-width:80vw;font-weight:500;box-shadow:0 20px 40px rgba(0,0,0,.5)}.toast.hidden{display:none}
 .banner{background:var(--warn-bg);border:1px solid rgba(251,191,36,.3);color:var(--warn);border-radius:var(--r-sm);padding:8px 12px;margin-bottom:12px;font-size:13px}
 .banner.hidden{display:none}
+
+/* ---------- loading states ---------- */
+#progress{position:fixed;top:0;left:0;height:2px;width:0;background:linear-gradient(90deg,var(--info),#fff);z-index:50;opacity:0;transition:width .25s ease,opacity .25s}
+#progress.on{opacity:1}
+.sk{display:inline-block;background:linear-gradient(90deg,var(--card-2) 25%,var(--card-3) 37%,var(--card-2) 63%);background-size:400% 100%;animation:shimmer 1.3s ease-in-out infinite;border-radius:6px}
+@keyframes shimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}
+.stat.sk-stat b{display:block}.stat.sk-stat .sk{height:15px;width:36px;margin-bottom:5px}.stat.sk-stat span .sk{height:8px;width:56px}
+.sk-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow)}
+.sk-card .sk{display:block;height:11px;margin-bottom:9px}.sk-card .sk:nth-child(1){width:22%;height:9px}.sk-card .sk:nth-child(2){width:58%;height:15px}
+.sk-card .sk:nth-child(3){width:86%}.sk-card .sk:nth-child(4){width:70%}.sk-card .sk:nth-child(5){width:40%;height:28px;margin-top:14px;border-radius:8px}
+.sk-row{display:flex;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line)}.sk-row .sk{height:11px;flex:1}.sk-row .sk:first-child{max-width:70px}
+.sk-table{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow)}
+.boot{display:flex;align-items:center;justify-content:center;gap:10px;padding:40px;color:var(--muted);font-size:13px}
+.spin{width:14px;height:14px;border:2px solid var(--line-2);border-top-color:var(--ink-2);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hero button{transition:transform .12s ease,box-shadow .2s}.hero button:hover{transform:translateY(-1px)}
+.hero.busy button{pointer-events:none;opacity:.6}

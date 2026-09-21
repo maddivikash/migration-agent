@@ -1,0 +1,90 @@
+# Target schema for the "employees" entity in the new HR platform.
+# The agent maps every source column onto one of these fields (or drops it).
+entity: employees
+identity:
+  # Used to recognise the same person across source files (in priority order).
+  keys: [email, employee_id]
+fields:
+  employee_id:
+    type: string
+    required: true
+    unique: true
+    description: Stable identifier from the legacy system (e.g. E1042).
+    aliases: [emp id, employee number, emp no, staff id, contact id, id, worker id]
+  first_name:
+    type: string
+    required: true
+    aliases: [first name, given name, fname, forename]
+  last_name:
+    type: string
+    required: true
+    aliases: [last name, surname, family name, lname]
+  full_name:
+    type: string
+    required: false
+    virtual: true   # accepted from sources, split into first/last, never pushed
+    aliases: [full name, name, employee name]
+  email:
+    type: email
+    required: true
+    unique: true
+    aliases: [work email, email address, official email, company email, e-mail]
+  phone:
+    type: phone
+    required: false
+    aliases: [phone number, mobile, contact, cell, telephone]
+  date_of_birth:
+    type: date
+    required: false
+    aliases: [dob, birth date, birthday, date of birth]
+  hire_date:
+    type: date
+    required: true
+    aliases: [date of joining, start date, joined, joining date, doj, hired on]
+  department:
+    type: enum
+    required: true
+    values: [Engineering, Sales, Marketing, Finance, HR, Operations, Support]
+    aliases: [dept, team, department code, division, function]
+  job_title:
+    type: string
+    required: false
+    aliases: [designation, title, role, position]
+  employment_type:
+    type: enum
+    required: true
+    values: [full_time, part_time, contractor, intern]
+    aliases: [emp type, type, employment category, worker type]
+  manager_email:
+    type: email
+    required: false
+    aliases: [reporting manager email, manager, reports to, supervisor email]
+  location:
+    type: string
+    required: false
+    aliases: [office, city, work location, site]
+  salary:
+    type: number
+    required: false
+    min: 0
+    aliases: [annual ctc, comp, compensation, base salary, ctc, annual salary]
+  status:
+    type: enum
+    required: true
+    values: [active, terminated, on_leave]
+    aliases: [employment status, active flag, emp status, state]
+  termination_date:
+    type: date
+    required: false
+    aliases: [last working day, end date, terminated on, exit date, lwd]
+rules:
+  - id: termination_requires_date
+    description: A terminated employee must have a termination_date.
+    when: {status: terminated}
+    require: [termination_date]
+  - id: termination_after_hire
+    description: termination_date must not be before hire_date.
+    compare: {left: termination_date, op: ">=", right: hire_date}
+  - id: hire_after_birth
+    description: hire_date must be at least 16 years after date_of_birth.
+    compare: {left: hire_date, op: ">=", right: date_of_birth, min_years: 16}

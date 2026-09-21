@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migration Agent</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="statusDot"></span> Migration Agent <span class="sub">employees → new HR platform</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="actions">
+    <button id="btnRun" class="primary">▶ Run agent</button>
+    <button id="btnPush">⇪ Push ready records</button>
+    <label class="upload">＋ Add file<input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple hidden></label>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="live" class="active">Live feed</button>
+  <button data-tab="queue">Needs you <span class="badge" id="queueBadge">0</span></button>
+  <button data-tab="mappings">Mappings</button>
+  <button data-tab="records">Records</button>
+  <button data-tab="audit">Audit trail</button>
+</nav>
+
+<main>
+  <section id="tab-live" class="tab active">
+    <div class="split">
+      <div class="feed" id="feed"><div class="empty">No run yet. Click <b>Run agent</b> to start on the sample files.</div></div>
+      <aside class="side">
+        <h3>What the agent decides alone</h3>
+        <ul class="policy">
+          <li><b>Applies silently</b> whitespace & casing, date parsing with evidence, phone formatting, enum synonyms, exact duplicate rows, blank-fill across sources, dropping columns with no target.</li>
+          <li><b>Applies but flags</b> soft conflicts between sources (keeps the highest-priority file), 3-token names, lenient date parses.</li>
+          <li><b>Asks you</b> column that fits two fields, date order it can't infer, values that fail cleaning twice, unknown enum values, conflicting identity fields, probable duplicates, business-rule violations.</li>
+        </ul>
+        <h3>Sources <small>(priority order)</small></h3>
+        <ol id="fileList" class="files"></ol>
+        <h3>Assist model</h3>
+        <div id="llmInfo" class="muted small"></div>
+        <h3>Mapping memory</h3>
+        <div id="memInfo" class="muted small"></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-queue" class="tab">
+    <div class="split">
+      <div id="queue" class="queue"></div>
+      <aside class="side">
+        <h3>Resolved <span class="muted" id="resolvedCount"></span></h3>
+        <div id="resolved" class="resolved"></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-mappings" class="tab"><div id="mappings"></div></section>
+
+  <section id="tab-records" class="tab">
+    <div class="toolbar">
+      <input id="recSearch" placeholder="search records…">
+      <select id="recStatus"><option value="">all statuses</option><option>ready</option><option>held</option><option>pushed</option><option>failed</option><option>rejected</option><option>rolled_back</option></select>
+      <span class="grow"></span>
+      <button id="btnRetry">↻ Retry failed</button>
+      <button id="btnRetryNoMgr" title="For records the target rejected because the manager doesn't exist there yet">↻ Retry failed without manager</button>
+      <button id="btnRollback" class="danger">⟲ Roll back all pushed</button>
+    </div>
+    <div id="records"></div>
+  </section>
+
+  <section id="tab-audit" class="tab">
+    <div class="toolbar">
+      <span class="muted">Every value the agent or a person changed, with the reason. Every call made to the target.</span>
+      <span class="grow"></span>
+      <a class="button" href="/api/audit.csv" download>⤓ Changes CSV</a>
+      <a class="button" href="/api/audit" target="_blank">⤓ Full audit JSON</a>
+    </div>
+    <div id="audit"></div>
+  </section>
+</main>
+
+<div id="drawer" class="drawer hidden"><div class="drawer-inner"><button class="close" onclick="closeDrawer()">✕</button><div id="drawerBody"></div></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

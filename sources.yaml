@@ -1,0 +1,7 @@
+# Source files in PRIORITY order. When two files disagree on a non-identity field
+# (phone, title, status...) the agent keeps the value from the file listed first
+# and records the loser in the audit trail. The HR system of record goes first.
+files:
+  - legacy_hris_employees.csv
+  - crm_contacts.xlsx
+  - payroll_dump.csv

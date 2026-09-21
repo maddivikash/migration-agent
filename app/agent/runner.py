@@ -142,7 +142,8 @@ class Agent:
         desc = {n: f.description or f"{f.type}" + (f" one of {f.values}" if f.values else "") for n, f in self.schema.fields.items()}
         for m in maps:
             eid = f"map:{t.name}:{m.source_column}"
-            remembered = self.memory.column(m.source_column)
+            has_mem = self.memory.has_column(m.source_column)
+            remembered = self.memory.column(m.source_column) if has_mem else None
             d = self.decided(eid)
             if d:                                            # human already decided this column
                 m.target = None if d.get("value") in (None, "__drop__") else d["value"]
@@ -150,7 +151,7 @@ class Agent:
                 self.emit("map", f"{t.name}: '{m.source_column}' -> {m.target or 'DROP'} (consultant decision)", {"file": t.name})
                 # keep the escalation visible as resolved
                 self.escalate(self._mapping_escalation(t, m, eid))
-            elif m.status in ("ambiguous", "weak") and remembered is not None:
+            elif m.status in ("ambiguous", "weak") and has_mem:
                 m.target, m.status, m.confidence = (remembered or None), "memory", 1.0
                 m.note = "reused a mapping a consultant confirmed on an earlier run"
                 self.emit("map", f"{t.name}: '{m.source_column}' -> {m.target or 'DROP'} (from mapping memory)", {"file": t.name})

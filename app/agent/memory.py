@@ -21,9 +21,14 @@ class Memory:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.data, indent=2))
 
-    # column name (normalised) -> target field or None (=drop)
+    _MISSING = object()
+
+    # column name (normalised) -> target field, or None (= drop). Returns _MISSING when unknown.
     def column(self, col: str):
-        return self.data["column_mappings"].get(col.strip().lower())
+        return self.data["column_mappings"].get(col.strip().lower(), self._MISSING)
+
+    def has_column(self, col: str) -> bool:
+        return col.strip().lower() in self.data["column_mappings"]
 
     def remember_column(self, col: str, target: str | None):
         self.data["column_mappings"][col.strip().lower()] = target; self.save()

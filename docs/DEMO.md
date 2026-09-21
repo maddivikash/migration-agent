@@ -1,5 +1,9 @@
 # Demo script (≈3 minutes)
 
+The recorded version of exactly this script lives at [`app/static/demo.mp4`](../app/static/demo.mp4)
+(narrated). Regenerate with `.venv/bin/python scripts/record_demo.py` while the app is running;
+the voice-over text is in [`scripts/narration.py`](../scripts/narration.py).
+
 Use this as the storyboard for the demo recording. Start with a fresh state: `rm -rf .state && ./run.sh`.
 
 1. **Run** — open <http://localhost:8000>, click **Run agent**. On the *Live feed*, point at:

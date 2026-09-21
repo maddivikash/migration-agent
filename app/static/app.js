@@ -90,8 +90,12 @@ function dupHtml(e) {
   const side = (x, y, title) => `<div><h5>${title}</h5>${keys.map(k => `<div class="${x[k] !== y[k] ? "diff" : ""}"><span class="muted">${k}</span> <span class="mono">${fmt(x[k])}</span></div>`).join("")}<div class="muted">${(x.sources || []).map(s => `${esc(s.file)}#${s.row}`).join(", ")}</div></div>`;
   return `<div class="compare">${side(a, b, "Existing record")}${side(b, a, "Suspected duplicate")}</div>`;
 }
+let queueSig = "", mapSig = "";
 function renderQueue() {
   const q = $("#queue");
+  // only rebuild when the set of escalations changed - otherwise a poll would wipe what the consultant is typing
+  const sig = escalations.open.map(e => e.id).join("|") + "#" + escalations.resolved.length + "#" + state.run_no;
+  if (sig === queueSig) return; queueSig = sig;
   if (!escalations.open.length) { q.innerHTML = `<div class="card"><div class="empty">${state.run_no ? "Nothing needs your attention. Everything else the agent handled on its own." : "Run the agent first."}</div></div>`; }
   else q.innerHTML = escalations.open.map(e => `
     <div class="card ${e.severity}" data-id="${esc(e.id)}">
@@ -123,6 +127,8 @@ async function decide(id, body) {
 /* ---------------- mappings ---------------- */
 function renderMappings() {
   const el = $("#mappings"); const files = Object.keys(mappings);
+  const sig = JSON.stringify(Object.values(mappings).flat().map(m => [m.source_column, m.target, m.status])) + state.run_no;
+  if (sig === mapSig) return; mapSig = sig;
   if (!files.length) return el.innerHTML = '<div class="card"><div class="empty">Run the agent first.</div></div>';
   const targets = schema ? Object.keys(schema.fields) : [];
   el.innerHTML = files.map(f => `<div class="filecard"><h3>${esc(f)} <small>${mappings[f].filter(m => m.target).length} of ${mappings[f].length} columns migrated</small></h3>

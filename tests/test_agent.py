@@ -21,8 +21,8 @@ def run(decisions=None, tmp_path=Path("/tmp")):
 
 # ---- deterministic cleaners: what the agent fixes alone
 def test_phone_formats_normalise_to_e164():
-    for raw in ("9876543210", "+91 98765 43210", "+91-9876543210", "98765-43210", "09876543210"):
-        assert C.clean_phone(raw)[0] == "+919876543210"
+    for raw in ("9000012345", "+91 90000 12345", "+91-9000012345", "90000-12345", "09000012345"):
+        assert C.clean_phone(raw)[0] == "+919000012345"
 
 def test_unambiguous_dates_parse_silently():
     assert C.clean_date("Jan 15, 2024", None) == ("2024-01-15", 1.0, "parsed as %b %d, %Y")

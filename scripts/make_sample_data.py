@@ -119,7 +119,7 @@ crm_rows.append({"contact_id": "C9002", "full_name": f"{p['fn']} {p['ln']}", "em
     "title": p["title"], "type": "Full Time", "manager": p["mgr"], "city": p["city"], "comp": p["salary"], "active_flag": "Y", "end_date": ""})
 # planted: brand-new person only in CRM (valid, should flow through)
 crm_rows.append({"contact_id": "C9003", "full_name": "Fatima Sheikh", "email_address": "fatima.sheikh@acmecorp.example",
-    "mobile": "+91 98765 43210", "birth_date": "1992-11-02", "start_date": "Jan 15, 2024", "team": "Support", "title": "Support Engineer",
+    "mobile": "+91 90000 12345", "birth_date": "1992-11-02", "start_date": "Jan 15, 2024", "team": "Support", "title": "Support Engineer",
     "type": "Full Time", "manager": "", "city": "Mumbai", "comp": 900000, "active_flag": "Y", "end_date": ""})
 wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Contacts"
 ws.append(list(crm_rows[0].keys()))
